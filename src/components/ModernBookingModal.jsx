@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import ReactDOM from "react-dom";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import { paymentService } from "../services/paymentService";
 
 const ModernBookingModal = () => {
   // Show loading overlay after payment, before confirmation
@@ -40,6 +41,8 @@ const ModernBookingModal = () => {
   const [phoneError, setPhoneError] = useState("");
   const [emailError, setEmailError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [backendPricing, setBackendPricing] = useState(null);
+  const [pricingLoading, setPricingLoading] = useState(false);
   const navigate = useNavigate();
 
   const apiBase = (import.meta.env && import.meta.env.VITE_API_BASE_URL) || "https://backend-main-production-ef63.up.railway.app"; // fallback to Railway API
@@ -87,7 +90,47 @@ const ModernBookingModal = () => {
     }
   };
 
-  // Calculate pricing for all pass types with bulk discount
+  // Fetch pricing from backend endpoint
+  const fetchBackendPricing = async () => {
+    setPricingLoading(true);
+    try {
+      const pricingData = {
+        ticket_type: ticketType,
+        booking_date: ticketData.booking_date,
+        passes: ticketData.passes
+      };
+      
+      console.log('🔧 Fetching pricing from backend:', pricingData);
+      const pricing = await paymentService.getPricingFromBackend(pricingData);
+      
+      // Validate backend response structure
+      if (pricing && typeof pricing.totalAmount === 'number') {
+        setBackendPricing(pricing);
+        console.log('🔧 Backend pricing response:', pricing);
+      } else {
+        console.warn('Invalid pricing response from backend:', pricing);
+        setBackendPricing(null);
+      }
+    } catch (error) {
+      console.error('Failed to fetch backend pricing:', error);
+      
+      // Show user-friendly message for common errors
+      if (error.message.includes('404')) {
+        console.warn('Backend pricing endpoint not available, using frontend calculation');
+      } else if (error.message.includes('Network')) {
+        console.warn('Network error while fetching pricing, using frontend calculation');
+      } else {
+        console.warn('Backend pricing error:', error.message);
+      }
+      
+      // Keep using frontend calculation as fallback
+      setBackendPricing(null);
+    } finally {
+      setPricingLoading(false);
+    }
+  };
+
+  // Calculate pricing for all pass types with bulk discount (fallback)
   const calculatePrice = () => {
     let totalAmount = 0;
     let discountApplied = false;
@@ -146,7 +189,15 @@ const ModernBookingModal = () => {
     };
   };
 
-  const priceInfo = calculatePrice();
+  // Fetch backend pricing when ticket data changes
+  useEffect(() => {
+    const hasTickets = Object.values(ticketData.passes).some(count => count > 0);
+    if (hasTickets && (ticketType === 'season' || ticketData.booking_date)) {
+      fetchBackendPricing();
+    }
+  }, [ticketData.passes, ticketData.booking_date, ticketType]);
+
+  const priceInfo = backendPricing || calculatePrice();
 
   const handleTicketSubmit = async () => {
 
@@ -641,34 +692,52 @@ const ModernBookingModal = () => {
 
                 {/* Price Preview - show breakdown for each pass type */}
                 <div className="bg-gradient-to-r from-pink-50 to-orange-50 rounded-lg p-3 border border-pink-100">
-                  <div className="flex flex-col gap-1">
-                    <div className="text-gray-600 text-sm mb-1">Total Amount</div>
-                    {priceInfo.details.map(({ type, count, unitPrice, originalPrice, typeDiscount }) => (
-                      count > 0 && (
-                        <div key={type} className="flex justify-between items-center text-xs text-gray-700">
-                          <span>{labelMap[ticketType][type]} <span className="font-bold">× {count}</span></span>
-                          <span>
-                            {typeDiscount > 0 && (
-                              <span className="line-through text-gray-400 mr-1">₹{originalPrice * count}</span>
-                            )}
-                            <span className={typeDiscount > 0 ? "text-green-700 font-bold" : "font-bold"}>₹{unitPrice * count}</span>
-                          </span>
-                        </div>
-                      )
-                    ))}
-                    <div className="border-t border-orange-200 my-2"></div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-base font-bold text-gray-700">Grand Total</span>
-                      <span className="text-xl font-extrabold text-gray-900">₹{priceInfo.totalAmount}</span>
+                  {pricingLoading ? (
+                    <div className="flex items-center justify-center py-4">
+                      <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-pink-500 mr-2"></div>
+                      <span className="text-gray-600 text-sm">Calculating pricing...</span>
                     </div>
-                    {/* Female 50% discount message */}
-                    {priceInfo.isFemaleDiscountDay && ticketType === 'single' && (
-                      <div className="text-pink-600 text-xs font-semibold mt-1">Special: 50% OFF for Female tickets on 23rd September!</div>
-                    )}
-                    {priceInfo.bulkEligible && !priceInfo.isFemaleDiscountDay && (
-                      <div className="text-green-600 text-xs font-semibold mt-1">Bulk discount applied! You save ₹{priceInfo.savings}</div>
-                    )}
-                  </div>
+                  ) : (
+                    <div className="flex flex-col gap-1">
+                      <div className="text-gray-600 text-sm mb-1">
+                        Total Amount
+                        {backendPricing && (
+                          <span className="ml-2 text-xs text-green-600 font-semibold">✓ Backend Verified</span>
+                        )}
+                        {!backendPricing && (
+                          <span className="ml-2 text-xs text-orange-600 font-semibold">⚠ Fallback Calculation</span>
+                        )}
+                      </div>
+                      {priceInfo.details && priceInfo.details.map(({ type, count, unitPrice, originalPrice, typeDiscount }) => (
+                        count > 0 && (
+                          <div key={type} className="flex justify-between items-center text-xs text-gray-700">
+                            <span>{labelMap[ticketType][type]} <span className="font-bold">× {count}</span></span>
+                            <span>
+                              {typeDiscount > 0 && (
+                                <span className="line-through text-gray-400 mr-1">₹{originalPrice * count}</span>
+                              )}
+                              <span className={typeDiscount > 0 ? "text-green-700 font-bold" : "font-bold"}>₹{unitPrice * count}</span>
+                            </span>
+                          </div>
+                        )
+                      ))}
+                      <div className="border-t border-orange-200 my-2"></div>
+                      <div className="flex justify-between items-center">
+                        <span className="text-base font-bold text-gray-700">Grand Total</span>
+                        <span className="text-xl font-extrabold text-gray-900">₹{priceInfo.totalAmount}</span>
+                      </div>
+                      {/* Female 50% discount message */}
+                      {priceInfo.isFemaleDiscountDay && ticketType === 'single' && (
+                        <div className="text-pink-600 text-xs font-semibold mt-1">Special: 50% OFF for Female tickets on 23rd September!</div>
+                      )}
+                      {priceInfo.bulkEligible && !priceInfo.isFemaleDiscountDay && (
+                        <div className="text-green-600 text-xs font-semibold mt-1">Bulk discount applied! You save ₹{priceInfo.savings}</div>
+                      )}
+                      {priceInfo.discountMessage && (
+                        <div className="text-green-600 text-xs font-semibold mt-1">{priceInfo.discountMessage}</div>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -1,6 +1,45 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'https://backend-main-production-ef63.up.railway.app';
 
 class PaymentService {
+  // Get pricing from backend endpoint
+  async getPricingFromBackend(pricingData) {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/booking/pricing`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(pricingData),
+      });
+
+      if (!response.ok) {
+        if (response.status === 404) {
+          throw new Error('Pricing endpoint not found (404) - backend may not have this endpoint yet');
+        }
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      const data = await response.json();
+      
+      if (!data.success) {
+        throw new Error(data.message || 'Failed to get pricing from backend');
+      }
+
+      // Validate response structure
+      if (!data.pricing || typeof data.pricing.totalAmount !== 'number') {
+        throw new Error('Invalid pricing response structure from backend');
+      }
+
+      return data.pricing;
+    } catch (error) {
+      if (error.name === 'TypeError' && error.message.includes('fetch')) {
+        throw new Error('Network error: Unable to connect to backend pricing service');
+      }
+      console.error('Backend pricing error:', error);
+      throw error;
+    }
+  }
+
   // Load Razorpay script dynamically
   loadRazorpayScript() {
     return new Promise((resolve, reject) => {
